@@ -142,9 +142,21 @@ int musicVolume = 64;
 ///////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char* args[]) {
-	SDL_CreateWindowAndRenderer(SCREEN_WIDTH, SCREEN_HEIGHT, 0, &window, &renderer);
-	TTF_Init();
-	Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048);
+	if (SDL_CreateWindowAndRenderer(SCREEN_WIDTH, SCREEN_HEIGHT, 0, &window, &renderer) < 0) {
+		std::cerr << "SDL window and renderer could not be created! SDL Error: " << SDL_GetError() << std::endl;
+		return 1;
+	}
+	
+	if (TTF_Init() == -1) {
+		std::cerr << "SDL_ttf could not initialize! TTF Error: " << TTF_GetError() << std::endl;
+		SDL_Quit();
+		return 1;
+	}
+	
+	if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0) {
+		std::cerr << "SDL_mixer could not initialize! Mix Error: " << Mix_GetError() << std::endl;
+	}
+	
 	initMaze(maze0, 0);
 	initMaze(maze1, 1);
 	initMaze(maze2, 2);
@@ -1162,6 +1174,11 @@ std::string getUsername() {
 
 	while (!stop) {
 		while (SDL_PollEvent(&e) != 0) {
+			if (e.type == SDL_QUIT) {
+				running = false;
+				stop = true;
+				break;
+			}
 			if (e.type == SDL_KEYDOWN) {
 				if (e.key.keysym.sym == SDLK_BACKSPACE && usernameInput.length() > 0) {
 					usernameInput.pop_back();
@@ -1169,19 +1186,36 @@ std::string getUsername() {
 				else if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) {
 					stop = true;
 				}
+				else if (e.key.keysym.sym == SDLK_ESCAPE) {
+					stop = true;
+				}
 			}
 			else if (e.type == SDL_TEXTINPUT) {
-				usernameInput += e.text.text;
+				if (usernameInput.length() < 20) { // Limit username length
+					usernameInput += e.text.text;
+				}
 			}
 		}
+		if (!running) break; // Exit if application is closing
+		
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 		SDL_RenderClear(renderer);
 		text("font/HeavyDataNerdFont-Regular.ttf", 32, "Write Your Name", 100, 200);
 		text("font/HeavyDataNerdFont-Regular.ttf", 28, usernameInput.c_str(), 100, 300);
-		text("font/HeavyDataNerdFont-Regular.ttf", 24, "Press Enter", 100, 700);
+		text("font/HeavyDataNerdFont-Regular.ttf", 24, "Press Enter to confirm", 100, 700);
+		text("font/HeavyDataNerdFont-Regular.ttf", 24, "Press Escape to cancel", 100, 730);
 		SDL_RenderPresent(renderer);
+		
+		// Add small delay to prevent excessive CPU usage
+		SDL_Delay(16); // ~60 FPS
 	}
 	SDL_StopTextInput();
+	
+	// If username is empty, provide a default
+	if (usernameInput.empty()) {
+		usernameInput = "Player";
+	}
+	
 	return usernameInput;
 }
 
@@ -1192,6 +1226,11 @@ void drawSoundMenu() {
 
 	while (!stop) {
 		while (SDL_PollEvent(&e) != 0) {
+			if (e.type == SDL_QUIT) {
+				running = false;
+				stop = true;
+				break;
+			}
 			if (e.type == SDL_KEYDOWN) {
 				if (e.key.keysym.sym == SDLK_BACKSPACE && volumeStr.length() > 0) {
 					volumeStr.pop_back();
@@ -1199,23 +1238,43 @@ void drawSoundMenu() {
 				else if (e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_KP_ENTER) {
 					stop = true;
 				}
+				else if (e.key.keysym.sym == SDLK_ESCAPE) {
+					stop = true;
+				}
 			}
 			else if (e.type == SDL_TEXTINPUT) {
-				if (isdigit(e.text.text[0])) {
+				if (isdigit(e.text.text[0]) && volumeStr.length() < 3) { // Limit to 3 digits (max 128)
 					volumeStr += e.text.text;
 				}
 			}
 		}
+		if (!running) break; // Exit if application is closing
+		
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 		SDL_RenderClear(renderer);
 		text("font/HeavyDataNerdFont-Regular.ttf", 32, "Volume (0-128)", 950, 200);
 		text("font/HeavyDataNerdFont-Regular.ttf", 28, volumeStr.c_str(), 950, 300);
-		text("font/HeavyDataNerdFont-Regular.ttf", 24, "Press Enter", 950, 700);
+		text("font/HeavyDataNerdFont-Regular.ttf", 24, "Press Enter to confirm", 950, 700);
+		text("font/HeavyDataNerdFont-Regular.ttf", 24, "Press Escape to cancel", 950, 730);
 		SDL_RenderPresent(renderer);
+		
+		// Add small delay to prevent excessive CPU usage
+		SDL_Delay(16); // ~60 FPS
 	}
 	SDL_StopTextInput();
-	musicVolume = std::stoi(volumeStr);
-	Mix_Volume(-1, musicVolume);
+	
+	// Validate and set volume
+	if (!volumeStr.empty()) {
+		try {
+			int newVolume = std::stoi(volumeStr);
+			if (newVolume >= 0 && newVolume <= 128) {
+				musicVolume = newVolume;
+				Mix_Volume(-1, musicVolume);
+			}
+		} catch (const std::exception& e) {
+			// If parsing fails, keep the original volume
+		}
+	}
 	gameState = GameState::OPTIONS_MENU;
 }
 
