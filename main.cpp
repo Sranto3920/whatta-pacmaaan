@@ -7,6 +7,7 @@
 #include<vector>
 #include<algorithm>
 #include<string>
+#include<map>
 #include"collision.h"
 
 //#####################Structs && Maze init#####################//
@@ -50,6 +51,8 @@ void quit();
 void timer();
 void handleMouse();
 void handleKeyPress();
+void cleanupFontCache();
+void loadUITextures();
 
 void drawTutorial();
 void drawStartMenu();
@@ -117,7 +120,11 @@ static bool running = true, isMoving = true, isFullscreen = false, hidecursor = 
 GameState gameState = GameState::START_MENU;
 SDL_Rect pauseRect = { 1700,50,32,32 };
 SDL_Rect backRect = { 1495,905,32,32 };
-SDL_Texture *pauseTexture, *backTexture;
+SDL_Texture *pauseTexture = nullptr, *backTexture = nullptr;
+bool texturesLoaded = false;
+
+// Mouse position for hover effects
+int mouseX = 0, mouseY = 0;
 
 int eatCount = 0;
 int currentScore = 0;
@@ -148,6 +155,9 @@ int main(int argc, char* args[]) {
 	while (running) {
 		timer();
 		while (SDL_PollEvent(&e)) {
+			if (e.type == SDL_QUIT) {
+				running = false;
+			}
 			handleKeyPress();
 			handleMouse();
 		}
@@ -195,7 +205,14 @@ int main(int argc, char* args[]) {
 				break;
 		}
 		SDL_RenderPresent(renderer);
-		//SDL_Delay(4);
+		
+		// Maintain consistent frame rate (60 FPS)
+		static Uint32 frameStart = 0;
+		Uint32 frameTime = SDL_GetTicks() - frameStart;
+		if (frameTime < 16) { // 16ms = ~60 FPS
+			SDL_Delay(16 - frameTime);
+		}
+		frameStart = SDL_GetTicks();
 	}
 	quit();
 	return 0;
@@ -232,6 +249,20 @@ void quit()
 	afraidGhost = nullptr;
 	Mix_FreeChunk(pacDeath);
 	pacDeath = nullptr;
+	
+	// Cleanup UI textures
+	if (pauseTexture) {
+		SDL_DestroyTexture(pauseTexture);
+		pauseTexture = nullptr;
+	}
+	if (backTexture) {
+		SDL_DestroyTexture(backTexture);
+		backTexture = nullptr;
+	}
+	
+	// Cleanup font cache
+	cleanupFontCache();
+	
 	SDL_DestroyRenderer(renderer);
 	renderer = nullptr;
 	SDL_DestroyWindow(window);
@@ -241,14 +272,49 @@ void quit()
 	SDL_Quit();
 }
 
+// Font cache to avoid reloading fonts
+static std::map<std::pair<std::string, int>, TTF_Font*> fontCache;
+
+void loadUITextures() {
+	if (!texturesLoaded) {
+		pauseTexture = IMG_LoadTexture(renderer, "tilemap/pauseImage.png");
+		backTexture = IMG_LoadTexture(renderer, "tilemap/back.png");
+		texturesLoaded = true;
+	}
+}
+
+void cleanupFontCache() {
+	for (auto& pair : fontCache) {
+		TTF_CloseFont(pair.second);
+	}
+	fontCache.clear();
+}
+
 void text(const char* fontname, int fontsize, const char* text, int x, int y)
 {
-	TTF_Font* font = TTF_OpenFont(fontname, fontsize);
+	// Use cached font if available
+	std::pair<std::string, int> fontKey = {fontname, fontsize};
+	TTF_Font* font = nullptr;
+	
+	auto it = fontCache.find(fontKey);
+	if (it != fontCache.end()) {
+		font = it->second;
+	} else {
+		font = TTF_OpenFont(fontname, fontsize);
+		if (font) {
+			fontCache[fontKey] = font;
+		}
+	}
+	
+	if (!font) {
+		std::cerr << "Failed to load font: " << fontname << " - " << TTF_GetError() << std::endl;
+		return;
+	}
+	
 	SDL_Color color = { 255, 255, 255 };
 	SDL_Surface* surface = TTF_RenderText_Solid(font, text, color);
 	if (!surface) {
 		std::cerr << "Failed to create surface: " << TTF_GetError() << std::endl;
-		TTF_CloseFont(font);
 		return;
 	}
 	SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
@@ -256,8 +322,39 @@ void text(const char* fontname, int fontsize, const char* text, int x, int y)
 	SDL_RenderCopy(renderer, texture, NULL, &rect);
 	SDL_DestroyTexture(texture);
 	SDL_FreeSurface(surface);
-	texture = nullptr;
-	TTF_CloseFont(font);
+}
+
+void textWithColor(const char* fontname, int fontsize, const char* text, int x, int y, SDL_Color color)
+{
+	// Use cached font if available
+	std::pair<std::string, int> fontKey = {fontname, fontsize};
+	TTF_Font* font = nullptr;
+	
+	auto it = fontCache.find(fontKey);
+	if (it != fontCache.end()) {
+		font = it->second;
+	} else {
+		font = TTF_OpenFont(fontname, fontsize);
+		if (font) {
+			fontCache[fontKey] = font;
+		}
+	}
+	
+	if (!font) {
+		std::cerr << "Failed to load font: " << fontname << " - " << TTF_GetError() << std::endl;
+		return;
+	}
+	
+	SDL_Surface* surface = TTF_RenderText_Solid(font, text, color);
+	if (!surface) {
+		std::cerr << "Failed to create surface: " << TTF_GetError() << std::endl;
+		return;
+	}
+	SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+	SDL_Rect rect = { x, y, surface->w, surface->h };
+	SDL_RenderCopy(renderer, texture, NULL, &rect);
+	SDL_DestroyTexture(texture);
+	SDL_FreeSurface(surface);
 }
 
 void musicPlayer(Mix_Chunk* sound, const char* text, int channel) {
@@ -721,7 +818,6 @@ void updateGhosts() {
 
 ////////////////////////////////////////////////////////////////////////////////
 void handleKeyPress() {
-	if (e.type == SDL_QUIT) running = false;
 	if (e.type == SDL_KEYDOWN) {
 		switch (e.key.keysym.sym) {
 			case SDLK_UP:
@@ -771,7 +867,7 @@ void handleKeyPress() {
 				gameState = GameState::OPTIONS_MENU;
 				break;
 			case SDLK_i:
-				isInvincible != isInvincible;
+				isInvincible = !isInvincible;
 				break;
 			case SDLK_h:
 				gameState = GameState::GAME_OVER;
@@ -917,71 +1013,147 @@ void updateHighScore(const std::string& username, int newScore) {
 
 void drawStartMenu()
 {
+	// Update mouse position
+	SDL_GetMouseState(&mouseX, &mouseY);
+	
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 	SDL_RenderClear(renderer);
 	text("font/HeavyDataNerdFont-Regular.ttf", 50, "Pacman", 940, 100);
-	text("font/HeavyDataNerdFont-Regular.ttf", 24, "Continue", 952, 350);
-	text("font/HeavyDataNerdFont-Regular.ttf", 24, "New Game", 950, 400);
-	text("font/HeavyDataNerdFont-Regular.ttf", 24, "Highscore", 947, 450);
-	text("font/HeavyDataNerdFont-Regular.ttf", 24, "Options", 961, 500);
-	text("font/HeavyDataNerdFont-Regular.ttf", 24, "Quit", 977, 550);
-	//SDL_RenderPresent(renderer);
+	
+	// Define colors for normal and hover states
+	SDL_Color normalColor = { 255, 255, 255 };
+	SDL_Color hoverColor = { 255, 255, 0 };
+	
+	// Continue button with hover effect
+	bool continueHover = (mouseX >= 900 && mouseX <= 1100 && mouseY >= 350 && mouseY <= 390);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 24, "Continue", 952, 350, continueHover ? hoverColor : normalColor);
+	
+	// New Game button with hover effect
+	bool newGameHover = (mouseX >= 900 && mouseX <= 1100 && mouseY >= 400 && mouseY <= 440);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 24, "New Game", 950, 400, newGameHover ? hoverColor : normalColor);
+	
+	// Highscore button with hover effect
+	bool highscoreHover = (mouseX >= 900 && mouseX <= 1100 && mouseY >= 450 && mouseY <= 490);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 24, "Highscore", 947, 450, highscoreHover ? hoverColor : normalColor);
+	
+	// Options button with hover effect
+	bool optionsHover = (mouseX >= 900 && mouseX <= 1100 && mouseY >= 500 && mouseY <= 540);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 24, "Options", 961, 500, optionsHover ? hoverColor : normalColor);
+	
+	// Quit button with hover effect
+	bool quitHover = (mouseX >= 900 && mouseX <= 1100 && mouseY >= 550 && mouseY <= 590);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 24, "Quit", 977, 550, quitHover ? hoverColor : normalColor);
 }
 
 void drawOptionsMenu() {
+	loadUITextures();
+	SDL_GetMouseState(&mouseX, &mouseY);
+	
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 	SDL_RenderClear(renderer);
-	text("font/HeavyDataNerdFont-Regular.ttf", 24, "Tutorial", 950, 450);
-	text("font/HeavyDataNerdFont-Regular.ttf", 24, "Sound", 960, 500);
-	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Return of Title Menu", 1540, 900);
-	backTexture = IMG_LoadTexture(renderer, "tilemap/back.png");
-	SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
-	//SDL_RenderPresent(renderer);
+	
+	// Define colors for normal and hover states
+	SDL_Color normalColor = { 255, 255, 255 };
+	SDL_Color hoverColor = { 255, 255, 0 };
+	
+	// Tutorial button with hover effect
+	bool tutorialHover = (mouseX >= 900 && mouseX <= 1100 && mouseY >= 450 && mouseY <= 490);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 24, "Tutorial", 950, 450, tutorialHover ? hoverColor : normalColor);
+	
+	// Sound button with hover effect
+	bool soundHover = (mouseX >= 900 && mouseX <= 1100 && mouseY >= 500 && mouseY <= 540);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 24, "Sound", 960, 500, soundHover ? hoverColor : normalColor);
+	
+	// Return button with hover effect
+	bool returnHover = (mouseX >= 1495 && mouseX <= 1800 && mouseY >= 900 && mouseY <= 950);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 32, "Return to Title Menu", 1540, 900, returnHover ? hoverColor : normalColor);
+	
+	if (backTexture) {
+		SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
+	}
 }
 
 void drawPauseMenu()
 {
+	loadUITextures();
+	SDL_GetMouseState(&mouseX, &mouseY);
+	
 	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Paused", 1750, 45);
-	pauseTexture = IMG_LoadTexture(renderer, "tilemap/pauseImage.png");
-	SDL_RenderCopy(renderer, pauseTexture, NULL, &pauseRect);
-	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Return of Title Menu", 1540, 900);
-	backTexture = IMG_LoadTexture(renderer, "tilemap/back.png");
-	SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
-	//SDL_RenderPresent(renderer);
+	if (pauseTexture) {
+		SDL_RenderCopy(renderer, pauseTexture, NULL, &pauseRect);
+	}
+	
+	// Return button with hover effect
+	SDL_Color normalColor = { 255, 255, 255 };
+	SDL_Color hoverColor = { 255, 255, 0 };
+	bool returnHover = (mouseX >= 1495 && mouseX <= 1800 && mouseY >= 900 && mouseY <= 950);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 32, "Return to Title Menu", 1540, 900, returnHover ? hoverColor : normalColor);
+	
+	if (backTexture) {
+		SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
+	}
 }
 
 void drawGameOverMenu()
 {
+	loadUITextures();
+	SDL_GetMouseState(&mouseX, &mouseY);
+	
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 	SDL_RenderClear(renderer);
 	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Game Over", 935, 200);
-	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Return of Title Menu", 1540, 900);
-	backTexture = IMG_LoadTexture(renderer, "tilemap/back.png");
-	SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
-	//SDL_RenderPresent(renderer);
+	
+	// Return button with hover effect
+	SDL_Color normalColor = { 255, 255, 255 };
+	SDL_Color hoverColor = { 255, 255, 0 };
+	bool returnHover = (mouseX >= 1495 && mouseX <= 1800 && mouseY >= 900 && mouseY <= 950);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 32, "Return to Title Menu", 1540, 900, returnHover ? hoverColor : normalColor);
+	
+	if (backTexture) {
+		SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
+	}
 }
 
 void drawVictoryScreen()
 {
+	loadUITextures();
+	SDL_GetMouseState(&mouseX, &mouseY);
+	
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 	SDL_RenderClear(renderer);
 	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Victory", 950, 500);
-	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Return of Title Menu", 1540, 900);
-	backTexture = IMG_LoadTexture(renderer, "tilemap/back.png");
-	SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
-	//SDL_RenderPresent(renderer);
+	
+	// Return button with hover effect
+	SDL_Color normalColor = { 255, 255, 255 };
+	SDL_Color hoverColor = { 255, 255, 0 };
+	bool returnHover = (mouseX >= 1495 && mouseX <= 1800 && mouseY >= 900 && mouseY <= 950);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 32, "Return to Title Menu", 1540, 900, returnHover ? hoverColor : normalColor);
+	
+	if (backTexture) {
+		SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
+	}
 	victory = true;
 }
 
 void drawHighScore() {
+	loadUITextures();
+	SDL_GetMouseState(&mouseX, &mouseY);
+	
 	std::string highScoreText = highScore.first + ": " + std::to_string(highScore.second);
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 	SDL_RenderClear(renderer);
-	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Highsocre", 945, 200);
+	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Highscore", 945, 200);
 	text("font/HeavyDataNerdFont-Regular.ttf", 32, highScoreText.c_str(), 950, 500);
-	text("font/HeavyDataNerdFont-Regular.ttf", 32, "Return of Title Menu", 1540, 900);
-	backTexture = IMG_LoadTexture(renderer, "tilemap/back.png");
-	SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
+	
+	// Return button with hover effect
+	SDL_Color normalColor = { 255, 255, 255 };
+	SDL_Color hoverColor = { 255, 255, 0 };
+	bool returnHover = (mouseX >= 1495 && mouseX <= 1800 && mouseY >= 900 && mouseY <= 950);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 32, "Return to Title Menu", 1540, 900, returnHover ? hoverColor : normalColor);
+	
+	if (backTexture) {
+		SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
+	}
 }
 
 std::string getUsername() {
@@ -1048,13 +1220,16 @@ void drawSoundMenu() {
 }
 
 void drawTutorial() {
+	loadUITextures();
+	SDL_GetMouseState(&mouseX, &mouseY);
+	
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 	SDL_RenderClear(renderer);
 	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Objective: Navigate Pacman through a maze, eating all dots while avoiding ghosts.", 50, 50);
 	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Controls: Use WASD / arrow keys to move Pacman.", 50, 80);
 	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Eat power pellets to turn the tables on ghosts for a short time.", 50, 110);
-	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Every dots contain 10 points, powerpill contain 20 points and eating afaraid ghosts gives 100 points.", 50, 140);
-	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Game highscore gets saved at pause menu, game over menu, vicoty menu and at the start of every level.", 50, 170);
+	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Every dot contains 10 points, power pill contains 20 points and eating afraid ghosts gives 100 points.", 50, 140);
+	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Game highscore gets saved at pause menu, game over menu, victory menu and at the start of every level.", 50, 170);
 	text("font/FiraCodeNerdFont-Regular.ttf", 28, "Some Cheats and shortcuts (Might break the game):", 50, 210);
 	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Press I to toggle Invincible mode", 50, 240);
 	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Press L to go to next level", 50, 270);
@@ -1064,10 +1239,17 @@ void drawTutorial() {
 	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Press J to get Victory Screen", 50, 390);
 	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Press Escape to pause the game", 50, 420);
 	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Press F1 to show/hide the mouse", 50, 450);
-	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Press Ctrl+F to fullscreen(Experimential)", 50, 480);
-	text("font/HeavyDataNerdFont-Regular.ttf", 24, "Return of Title Menu", 1540, 900);
-	backTexture = IMG_LoadTexture(renderer, "tilemap/back.png");
-	SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
+	text("font/FiraCodeNerdFont-Regular.ttf", 24, "Press Ctrl+F to fullscreen (Experimental)", 50, 480);
+	
+	// Return button with hover effect
+	SDL_Color normalColor = { 255, 255, 255 };
+	SDL_Color hoverColor = { 255, 255, 0 };
+	bool returnHover = (mouseX >= 1495 && mouseX <= 1800 && mouseY >= 900 && mouseY <= 950);
+	textWithColor("font/HeavyDataNerdFont-Regular.ttf", 24, "Return to Title Menu", 1540, 900, returnHover ? hoverColor : normalColor);
+	
+	if (backTexture) {
+		SDL_RenderCopy(renderer, backTexture, NULL, &backRect);
+	}
 }
 
 ////////////////////////////////////////////////////////MAZE//////////////////////////////////////////////////////////
