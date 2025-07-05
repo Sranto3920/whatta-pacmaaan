@@ -1,5 +1,5 @@
 #pragma once
-#include<SDL.h>
+#include<SDL2/SDL.h>
 class Collision {
 public:
     static bool checkCollision(const SDL_Rect& rec1, const SDL_Rect& rec2) {
